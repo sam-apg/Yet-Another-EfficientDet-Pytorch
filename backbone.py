@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from efficientdet.model import BiFPN, Regressor, Classifier, EfficientNet
-from efficientdet.utils import Anchors
+from efficientdet.utils import Anchors, BBoxTransform
 
 
 class EfficientDetBackbone(nn.Module):
@@ -41,23 +41,24 @@ class EfficientDetBackbone(nn.Module):
                     conv_channel_coef[compound_coef],
                     True if _ == 0 else False,
                     attention=True if compound_coef < 6 else False,
-                    use_p8=compound_coef > 7)
+                    use_p8=compound_coef > 7, onnx_export=True)
               for _ in range(self.fpn_cell_repeats[compound_coef])])
 
         self.num_classes = num_classes
         self.regressor = Regressor(in_channels=self.fpn_num_filters[self.compound_coef], num_anchors=num_anchors,
                                    num_layers=self.box_class_repeats[self.compound_coef],
-                                   pyramid_levels=self.pyramid_levels[self.compound_coef])
+                                   pyramid_levels=self.pyramid_levels[self.compound_coef], onnx_export=True)
         self.classifier = Classifier(in_channels=self.fpn_num_filters[self.compound_coef], num_anchors=num_anchors,
                                      num_classes=num_classes,
                                      num_layers=self.box_class_repeats[self.compound_coef],
-                                     pyramid_levels=self.pyramid_levels[self.compound_coef])
+                                     pyramid_levels=self.pyramid_levels[self.compound_coef], onnx_export=True)
 
         self.anchors = Anchors(anchor_scale=self.anchor_scale[compound_coef],
                                pyramid_levels=(torch.arange(self.pyramid_levels[self.compound_coef]) + 3).tolist(),
-                               **kwargs)
+                               **kwargs, onnx_export=True)
 
         self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
+        self.regressBoxes = BBoxTransform()
 
     def freeze_bn(self):
         for m in self.modules():
@@ -65,7 +66,20 @@ class EfficientDetBackbone(nn.Module):
                 m.eval()
 
     def forward(self, inputs):
-        max_size = inputs.shape[-1]
+        # ORIGINAL
+        #max_size = inputs.shape[-1]
+
+        # _, p3, p4, p5 = self.backbone_net(inputs)
+
+        # features = (p3, p4, p5)
+        # features = self.bifpn(features)
+
+        # regression = self.regressor(features)
+        # classification = self.classifier(features)
+        # anchors = self.anchors(inputs, inputs.dtype)
+
+        # This causes 8 outputs in the ONNX graph??
+        # return features, regression, classification, anchors
 
         _, p3, p4, p5 = self.backbone_net(inputs)
 
@@ -75,8 +89,15 @@ class EfficientDetBackbone(nn.Module):
         regression = self.regressor(features)
         classification = self.classifier(features)
         anchors = self.anchors(inputs, inputs.dtype)
+        transformed_anchors = self.regressBoxes(anchors, regression)
 
-        return features, regression, classification, anchors
+        scores = torch.max(classification, dim=2)[0]
+        index = torch.topk(scores, 500, dim=1)[1]
+
+        scores_topk = torch.index_select(classification, 1, index[0])
+        boxes_topk = torch.index_select(transformed_anchors, 1, index[0])
+
+        return scores_topk, boxes_topk
 
     def init_backbone(self, path):
         state_dict = torch.load(path)

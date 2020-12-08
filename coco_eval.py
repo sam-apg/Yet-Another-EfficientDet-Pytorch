@@ -22,7 +22,7 @@ from pycocotools.cocoeval import COCOeval
 
 from backbone import EfficientDetBackbone
 from efficientdet.utils import BBoxTransform, ClipBoxes
-from utils.utils import preprocess, invert_affine, postprocess, boolean_string
+from utils.utils import preprocess, invert_affine, postprocess, boolean_string, display
 
 ap = argparse.ArgumentParser()
 ap.add_argument('-p', '--project', type=str, default='coco', help='project file that contains parameters')
@@ -52,15 +52,15 @@ obj_list = params['obj_list']
 input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
 
 
-def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
+def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.1):
     results = []
 
     regressBoxes = BBoxTransform()
     clipBoxes = ClipBoxes()
 
-    for image_id in tqdm(image_ids):
+    for idx, image_id in enumerate(tqdm(image_ids)):
         image_info = coco.loadImgs(image_id)[0]
-        image_path = img_path + image_info['file_name']
+        image_path = image_info['file_name']
 
         ori_imgs, framed_imgs, framed_metas = preprocess(image_path, max_size=input_sizes[compound_coef], mean=params['mean'], std=params['std'])
         x = torch.from_numpy(framed_imgs[0])
@@ -75,17 +75,42 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
             x = x.float()
 
         x = x.unsqueeze(0).permute(0, 3, 1, 2)
+
+        if idx == 0:
+            torch.onnx.export(model,
+                            x,
+                            './efficientdet-test.onnx',
+                            verbose=False,
+                            export_params=True,
+                            opset_version=10,
+                            do_constant_folding=False,
+                            input_names=['input'],
+                            output_names=['scores', 'boxes']
+                            #output_names=['features', 'regression', 'classification', 'anchors'],
+                            # dynamic_axes={
+                            #     'input': {0: 'batch_size'},
+                            #     'features': {0: 'batch_size'},
+                            #     'regression': {0: 'batch_size'},
+                            #     'classification': {0: 'batch_size'},
+                            #     'anchors': {0: 'batch_size'},
+                            #     }
+            )
+
         features, regression, classification, anchors = model(x)
 
         preds = postprocess(x,
                             anchors, regression, classification,
                             regressBoxes, clipBoxes,
                             threshold, nms_threshold)
-        
+
         if not preds:
             continue
 
-        preds = invert_affine(framed_metas, preds)[0]
+        preds = invert_affine(framed_metas, preds)
+
+        display(preds, ori_imgs, obj_list, imshow=False, imwrite=True)
+
+        preds = preds[0]
 
         scores = preds['scores']
         class_ids = preds['class_ids']
@@ -142,10 +167,11 @@ if __name__ == '__main__':
     MAX_IMAGES = 10000
     coco_gt = COCO(VAL_GT)
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
-    
+
     if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
         model = EfficientDetBackbone(compound_coef=compound_coef, num_classes=len(obj_list),
                                      ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
+        model.backbone_net.model.set_swish(memory_efficient=False)
         model.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
         model.requires_grad_(False)
         model.eval()

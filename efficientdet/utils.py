@@ -108,14 +108,14 @@ class Anchors(nn.Module):
         for stride in self.strides:
             boxes_level = []
             for scale, ratio in itertools.product(self.scales, self.ratios):
-                if image_shape[1] % stride != 0:
+                if int(image_shape[1]) % stride != 0:
                     raise ValueError('input size must be divided by the stride.')
                 base_anchor_size = self.anchor_scale * stride * scale
                 anchor_size_x_2 = base_anchor_size * ratio[0] / 2.0
                 anchor_size_y_2 = base_anchor_size * ratio[1] / 2.0
 
-                x = np.arange(stride / 2, image_shape[1], stride)
-                y = np.arange(stride / 2, image_shape[0], stride)
+                x= np.arange(int(stride / 2), int(image_shape[1]), int(stride))
+                y = np.arange(int(stride / 2), int(image_shape[0]), int(stride))
                 xv, yv = np.meshgrid(x, y)
                 xv = xv.reshape(-1)
                 yv = yv.reshape(-1)

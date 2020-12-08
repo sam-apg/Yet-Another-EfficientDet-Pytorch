@@ -7,8 +7,8 @@ from efficientnet.utils import MemoryEfficientSwish, Swish
 from efficientnet.utils_extra import Conv2dStaticSamePadding, MaxPool2dStaticSamePadding
 
 
-def nms(dets, thresh):
-    return nms_torch(dets[:, :4], dets[:, 4], thresh)
+# def nms(dets, thresh):
+#     return nms_torch(dets[:, :4], dets[:, 4], thresh)
 
 
 class SeparableConvBlock(nn.Module):
@@ -51,6 +51,9 @@ class SeparableConvBlock(nn.Module):
 
         return x
 
+def onnx_upsample(x, scale):
+    sh = torch.tensor(x.size())
+    return nn.functional.interpolate(x, size=(int(sh[2]*scale), int(sh[3]*scale)), mode='nearest')
 
 class BiFPN(nn.Module):
     """
@@ -72,6 +75,7 @@ class BiFPN(nn.Module):
         super(BiFPN, self).__init__()
         self.epsilon = epsilon
         self.use_p8 = use_p8
+        self.onnx_export = onnx_export
 
         # Conv layers
         self.conv6_up = SeparableConvBlock(num_channels, onnx_export=onnx_export)
@@ -212,25 +216,29 @@ class BiFPN(nn.Module):
         p6_w1 = self.p6_w1_relu(self.p6_w1)
         weight = p6_w1 / (torch.sum(p6_w1, dim=0) + self.epsilon)
         # Connections for P6_0 and P7_0 to P6_1 respectively
-        p6_up = self.conv6_up(self.swish(weight[0] * p6_in + weight[1] * self.p6_upsample(p7_in)))
+        p6_upsample_op = self.p6_upsample(p7_in) if not self.onnx_export else onnx_upsample(p7_in, scale=2)
+        p6_up = self.conv6_up(self.swish(weight[0] * p6_in + weight[1] * p6_upsample_op))
 
         # Weights for P5_0 and P6_1 to P5_1
         p5_w1 = self.p5_w1_relu(self.p5_w1)
         weight = p5_w1 / (torch.sum(p5_w1, dim=0) + self.epsilon)
         # Connections for P5_0 and P6_1 to P5_1 respectively
-        p5_up = self.conv5_up(self.swish(weight[0] * p5_in + weight[1] * self.p5_upsample(p6_up)))
+        p5_upsample_op = self.p5_upsample9p6_up if not self.onnx_export else onnx_upsample(p6_up, scale=2)
+        p5_up = self.conv5_up(self.swish(weight[0] * p5_in + weight[1] * p5_upsample_op))
 
         # Weights for P4_0 and P5_1 to P4_1
         p4_w1 = self.p4_w1_relu(self.p4_w1)
         weight = p4_w1 / (torch.sum(p4_w1, dim=0) + self.epsilon)
         # Connections for P4_0 and P5_1 to P4_1 respectively
-        p4_up = self.conv4_up(self.swish(weight[0] * p4_in + weight[1] * self.p4_upsample(p5_up)))
+        p4_upsample_op = self.p4_upsample(p5_up) if not self.onnx_export else onnx_upsample(p5_up, scale=2)
+        p4_up = self.conv4_up(self.swish(weight[0] * p4_in + weight[1] * p4_upsample_op))
 
         # Weights for P3_0 and P4_1 to P3_2
         p3_w1 = self.p3_w1_relu(self.p3_w1)
         weight = p3_w1 / (torch.sum(p3_w1, dim=0) + self.epsilon)
         # Connections for P3_0 and P4_1 to P3_2 respectively
-        p3_out = self.conv3_up(self.swish(weight[0] * p3_in + weight[1] * self.p3_upsample(p4_up)))
+        p3_upsample_op = self.p3_upsample(p4_up) if not self.onnx_export else onnx_upsample(p4_up, scale=2)
+        p3_out = self.conv3_up(self.swish(weight[0] * p3_in + weight[1] * p3_upsample_op))
 
         if self.first_time:
             p4_in = self.p4_down_channel_2(p4)
@@ -290,24 +298,30 @@ class BiFPN(nn.Module):
             # P8_0 to P8_2
 
             # Connections for P7_0 and P8_0 to P7_1 respectively
-            p7_up = self.conv7_up(self.swish(p7_in + self.p7_upsample(p8_in)))
+            p7_upsample_op = self.p7_upsample(p8_in) if not self.onnx_export else onnx_upsample(p8_in, scale=2)
+            p7_up = self.conv7_up(self.swish(p7_in + p7_upsample_op))
 
             # Connections for P6_0 and P7_0 to P6_1 respectively
-            p6_up = self.conv6_up(self.swish(p6_in + self.p6_upsample(p7_up)))
+            p6_upsample_op = self.p6_upsample(p7_up) if not self.onnx_export else onnx_upsample(p7_up, scale=2)
+            p6_up = self.conv6_up(self.swish(p6_in + p6_upsample_op))
         else:
             # P7_0 to P7_2
 
             # Connections for P6_0 and P7_0 to P6_1 respectively
-            p6_up = self.conv6_up(self.swish(p6_in + self.p6_upsample(p7_in)))
+            p6_upsample_op = self.p6_upsample(p7_in) if not self.onnx_export else onnx_upsample(p7_in, scale=2)
+            p6_up = self.conv6_up(self.swish(p6_in + p6_upsample_op))
 
         # Connections for P5_0 and P6_1 to P5_1 respectively
-        p5_up = self.conv5_up(self.swish(p5_in + self.p5_upsample(p6_up)))
+        p5_upsample_op = self.p5_upsample(p6_up) if not self.onnx_export else onnx_upsample(p6_up, scale=2)
+        p5_up = self.conv5_up(self.swish(p5_in + p5_upsample_op))
 
         # Connections for P4_0 and P5_1 to P4_1 respectively
-        p4_up = self.conv4_up(self.swish(p4_in + self.p4_upsample(p5_up)))
+        p4_upsample_op = self.p4_upsample(p5_up) if not self.onnx_export else onnx_upsample(p5_up, scale=2)
+        p4_up = self.conv4_up(self.swish(p4_in + p4_upsample_op))
 
         # Connections for P3_0 and P4_1 to P3_2 respectively
-        p3_out = self.conv3_up(self.swish(p3_in + self.p3_upsample(p4_up)))
+        p3_upsample_op = self.p3_upsample(p4_up) if not self.onnx_export else onnx_upsample(p4_up, scale=2)
+        p3_out = self.conv3_up(self.swish(p3_in + p3_upsample_op))
 
         if self.first_time:
             p4_in = self.p4_down_channel_2(p4)
@@ -448,7 +462,7 @@ class EfficientNet(nn.Module):
                 drop_connect_rate *= float(idx) / len(self.model._blocks)
             x = block(x, drop_connect_rate=drop_connect_rate)
 
-            if block._depthwise_conv.stride == [2, 2]:
+            if block._depthwise_conv.stride == (2, 2):
                 feature_maps.append(last_x)
             elif idx == len(self.model._blocks) - 1:
                 feature_maps.append(x)

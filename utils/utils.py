@@ -137,6 +137,7 @@ def display(preds, imgs, obj_list, imshow=True, imwrite=False):
 
         for j in range(len(preds[i]['rois'])):
             (x1, y1, x2, y2) = preds[i]['rois'][j].astype(np.int)
+
             obj = obj_list[preds[i]['class_ids'][j]]
             score = float(preds[i]['scores'][j])
 
