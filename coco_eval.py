@@ -33,6 +33,7 @@ ap.add_argument('--cuda', type=boolean_string, default=True)
 ap.add_argument('--device', type=int, default=0)
 ap.add_argument('--float16', type=boolean_string, default=False)
 ap.add_argument('--override', type=boolean_string, default=True, help='override previous bbox results file if exists')
+ap.add_argument('--export', action='store_true', default=False)
 args = ap.parse_args()
 
 compound_coef = args.compound_coef
@@ -76,39 +77,37 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.1):
 
         x = x.unsqueeze(0).permute(0, 3, 1, 2)
 
-        if idx == 0:
+        if idx == 0 and args.export:
             torch.onnx.export(model,
                             x,
-                            './efficientdet-test.onnx',
+                            f'../../Apeirogon/modelzoo/efficientdet-d{compound_coef}.onnx',
                             verbose=False,
                             export_params=True,
                             opset_version=10,
                             do_constant_folding=False,
                             input_names=['input'],
-                            output_names=['scores', 'boxes']
-                            #output_names=['features', 'regression', 'classification', 'anchors'],
-                            # dynamic_axes={
-                            #     'input': {0: 'batch_size'},
-                            #     'features': {0: 'batch_size'},
-                            #     'regression': {0: 'batch_size'},
-                            #     'classification': {0: 'batch_size'},
-                            #     'anchors': {0: 'batch_size'},
-                            #     }
+                            output_names=['scores', 'boxes'],
+                            dynamic_axes={
+                                'input': {0: 'batch_size'},
+                                'scores': {0: 'batch_size'},
+                                'boxes': {0: 'batch_size'}
+                                }
             )
 
-        features, regression, classification, anchors = model(x)
+        classification, transformed_anchors = model(x)
 
-        preds = postprocess(x,
-                            anchors, regression, classification,
-                            regressBoxes, clipBoxes,
-                            threshold, nms_threshold)
+        print(classification.shape)
+        print(transformed_anchors.shape)
+
+        preds = postprocess(x, transformed_anchors, classification,
+                            clipBoxes, threshold, nms_threshold)
 
         if not preds:
             continue
 
         preds = invert_affine(framed_metas, preds)
 
-        display(preds, ori_imgs, obj_list, imshow=False, imwrite=True)
+        # display(preds, ori_imgs, obj_list, imshow=True, imwrite=False)
 
         preds = preds[0]
 

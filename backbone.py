@@ -91,13 +91,13 @@ class EfficientDetBackbone(nn.Module):
         anchors = self.anchors(inputs, inputs.dtype)
         transformed_anchors = self.regressBoxes(anchors, regression)
 
-        scores = torch.max(classification, dim=2)[0]
-        index = torch.topk(scores, 500, dim=1)[1]
+        # scores = torch.max(classification, dim=2)[0]
+        # index = torch.topk(scores, 500, dim=int(1))[1]
 
-        scores_topk = torch.index_select(classification, 1, index[0])
-        boxes_topk = torch.index_select(transformed_anchors, 1, index[0])
+        # scores_topk = torch.index_select(classification, int(1), index[0])
+        # boxes_topk = torch.index_select(transformed_anchors, int(1), index[0])
 
-        return scores_topk, boxes_topk
+        return classification, transformed_anchors
 
     def init_backbone(self, path):
         state_dict = torch.load(path)
